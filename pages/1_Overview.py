@@ -106,7 +106,7 @@ with c3:
 with c4:
     if len(headline_signing):
         r = headline_signing.iloc[0]
-        styles.kpi_card("Headline signing", format_eur_m(r["transfer_fee"]), f"{r['player_name']} \u2192 {r['to_club_name']}", delta_positive=True)
+        styles.kpi_card("Headline signing", format_eur_m(r["transfer_fee"]), caption=f"{r['player_name']} \u2192 {r['to_club_name']}")
     else:
         styles.kpi_card("Headline signing", "\u2014")
 

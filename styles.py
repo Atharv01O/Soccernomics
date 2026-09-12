@@ -71,6 +71,7 @@ html, body, [class*="css"]  {
 
 .sc-kpi-delta-up { color: #2FBF71; font-size: 0.85rem; margin-top: 0.25rem; }
 .sc-kpi-delta-down { color: #E06B6B; font-size: 0.85rem; margin-top: 0.25rem; }
+.sc-kpi-caption { color: #8FA398; font-size: 0.85rem; margin-top: 0.25rem; }
 
 .sc-panel {
     background: #16211D;
@@ -197,12 +198,19 @@ def section_label(text):
     st.markdown(f'<div class="sc-section-label">{text}</div>', unsafe_allow_html=True)
 
 
-def kpi_card(label, value, delta=None, delta_positive=True):
+def kpi_card(label, value, delta=None, delta_positive=True, caption=None):
+    """delta renders as a colored up/down arrow — use only for an actual
+    period-over-period comparison. Use `caption` instead for plain subtext
+    (a season label, a ratio, "% of revenue") that isn't a trend indicator;
+    it renders in neutral muted text with no arrow, so it can't be misread
+    as "this number went up" when it's just informational."""
     delta_html = ""
     if delta:
         cls = "sc-kpi-delta-up" if delta_positive else "sc-kpi-delta-down"
         arrow = "\u2191" if delta_positive else "\u2193"
         delta_html = f'<div class="{cls}">{arrow} {delta}</div>'
+    elif caption:
+        delta_html = f'<div class="sc-kpi-caption">{caption}</div>'
     st.markdown(
         f"""
         <div class="sc-kpi-card">

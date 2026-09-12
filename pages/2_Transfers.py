@@ -967,6 +967,11 @@ with left:
             ] != ""
         ]
 
+        label_positions = [
+            "top center" if i % 2 == 0 else "bottom center"
+            for i in range(len(label_data))
+        ]
+
         fig.add_trace(
             go.Scatter(
                 x=label_data[
@@ -983,7 +988,7 @@ with left:
                     "label"
                 ],
 
-                textposition="top center",
+                textposition=label_positions,
 
                 textfont=dict(
                     size=9,
@@ -2044,28 +2049,28 @@ if selected_club != "All Premier League clubs":
             styles.kpi_card(
                 "Incoming",
                 format_eur_m(club_spending_value),
-                f"{club_paid_buys} paid buys",
+                caption=f"{club_paid_buys} paid buys",
             )
 
         with p2:
             styles.kpi_card(
                 "Outgoing",
                 format_eur_m(club_income_value),
-                f"{club_paid_sales} paid sales",
+                caption=f"{club_paid_sales} paid sales",
             )
 
         with p3:
             styles.kpi_card(
                 "Net spend",
                 format_eur_m(club_net_spend),
-                "Spending − income",
+                caption="Spending − income",
             )
 
         with p4:
             styles.kpi_card(
                 "Avg buy",
                 format_eur_m(club_average_buy),
-                (
+                caption=(
                     f"Avg sale {format_eur_m(club_average_sale)}"
                     if club_paid_sales
                     else "No paid sales"
@@ -2081,7 +2086,7 @@ if selected_club != "All Premier League clubs":
 
         with profile_left:
 
-            styles.section_label("BIGGEST ARRIVAL")
+            styles.section_label("Biggest arrival")
 
             if not club_incoming.empty:
 
@@ -2131,7 +2136,7 @@ if selected_club != "All Premier League clubs":
 
         with profile_right:
 
-            styles.section_label("BIGGEST SALE")
+            styles.section_label("Biggest sale")
 
             if not club_outgoing.empty:
 
@@ -2187,7 +2192,7 @@ if selected_club != "All Premier League clubs":
     st.markdown("<div style='height:1.1rem'></div>", unsafe_allow_html=True)
 
     with styles.panel():
-        styles.section_label("HISTORICAL STEAL DEAL")
+        styles.section_label("Historical steal deal")
 
         # Historical = all recorded incoming transfers for selected club.
         steal_pool = pl_transfers[
@@ -2311,6 +2316,7 @@ def normalise_financial_club_name(name):
         "west ham united": "west ham united",
         "wolves": "wolverhampton wanderers",
         "wolverhampton wanderers": "wolverhampton wanderers",
+        "wolverhampton wdrs": "wolverhampton wanderers",
         "brighton": "brighton & hove albion",
         "brighton & hove albion": "brighton & hove albion",
         "nott'm forest": "nottingham forest",
@@ -2319,6 +2325,8 @@ def normalise_financial_club_name(name):
         "leicester city": "leicester city",
         "sheffield utd": "sheffield united",
         "sheffield united": "sheffield united",
+        "bournemouth": "afc bournemouth",
+        "afc bournemouth": "afc bournemouth",
     }
 
     return aliases.get(value, value)
@@ -2341,7 +2349,7 @@ if selected_club != "All Premier League clubs":
     with styles.panel():
 
         styles.section_label(
-            f"{short_club_name(selected_club)} — FINANCIAL CONDITION"
+            f"{short_club_name(selected_club)} — financial condition"
         )
 
         st.caption(
@@ -2381,21 +2389,21 @@ if selected_club != "All Premier League clubs":
                 styles.kpi_card(
                     "Revenue",
                     f"£{revenue / 1_000_000:.1f}M",
-                    "2024/25",
+                    caption="2024/25",
                 )
 
             with f2:
                 styles.kpi_card(
                     "Wage costs",
                     f"£{wages / 1_000_000:.1f}M",
-                    f"{wage_ratio:.1f}% of revenue",
+                    caption=f"{wage_ratio:.1f}% of revenue",
                 )
 
             with f3:
                 styles.kpi_card(
                     "Operating result",
                     f"£{operating_result / 1_000_000:.1f}M",
-                    f"{operating_margin:.1f}% margin",
+                    caption=f"{operating_margin:.1f}% margin",
                 )
 
             with f4:
@@ -2408,7 +2416,7 @@ if selected_club != "All Premier League clubs":
                 styles.kpi_card(
                     balance_label,
                     f"£{abs(net_funds_debt) / 1_000_000:.1f}M",
-                    "Deloitte 2024/25",
+                    caption="Deloitte 2024/25",
                 )
 
             st.markdown(
@@ -2452,7 +2460,7 @@ if selected_club != "All Premier League clubs":
             with financial_left:
 
                 styles.section_label(
-                    "REVENUE VS WAGE COSTS"
+                    "Revenue vs. wage costs"
                 )
 
                 chart_df = pd.DataFrame(
@@ -2606,7 +2614,7 @@ if selected_club != "All Premier League clubs":
                 )
 
             styles.insight_card(
-                "WHAT THE NUMBERS SAY",
+                "What the numbers say",
                 (
                     f"{wage_comment} "
                     f"{operating_comment} "
@@ -2634,7 +2642,7 @@ st.markdown(
 with styles.panel():
 
     styles.section_label(
-        "PREMIER LEAGUE FINANCIAL LANDSCAPE"
+        "Premier League financial landscape"
     )
 
     st.caption(
@@ -2654,7 +2662,7 @@ with styles.panel():
         )
 
         styles.section_label(
-            "REVENUE VS WAGE COSTS"
+            "Revenue vs. wage costs"
         )
 
         league_sorted = league_financials.sort_values(
@@ -2740,7 +2748,7 @@ with styles.panel():
         with pressure_left:
 
             styles.section_label(
-                "WAGE-TO-REVENUE RATIO"
+                "Wage-to-revenue ratio"
             )
 
             wage_rank = league_financials.sort_values(
@@ -2796,7 +2804,7 @@ with styles.panel():
         with pressure_right:
 
             styles.section_label(
-                "NET FUNDS / DEBT"
+                "Net funds / debt"
             )
 
             debt_rank = league_financials.sort_values(
@@ -2888,7 +2896,7 @@ with styles.panel():
         ]
 
         styles.insight_card(
-            "DELOITTE LEAGUE INSIGHT",
+            "Deloitte league insight",
             (
                 f"{short_club_name(highest_revenue['club'])} "
                 f"reported the highest revenue at "
