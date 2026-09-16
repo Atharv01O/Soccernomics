@@ -94,11 +94,13 @@ def load_player_valuations():
     df = pd.read_csv(f"{RAW_DIR}/player_valuations.csv")
 
     if "date" in df.columns:
-        # Source format is DD-MM-YYYY. Without dayfirst=True, pandas silently
-        # swaps day/month for every row where both are <=12 (confirmed: ~37%
-        # of rows, e.g. "09-12-2003" parsed as Sep 12 instead of Dec 9) —
-        # this was corrupting every age-vs-valuation-date calculation.
-        df["date"] = pd.to_datetime(df["date"], errors="coerce", dayfirst=True)
+        # NOTE: the source CSV was originally DD-MM-YYYY (dayfirst=True was
+        # required to avoid silently swapping day/month on ~37% of rows).
+        # The data has since been corrected to unambiguous ISO format
+        # (YYYY-MM-DD) — dayfirst is irrelevant to an ISO string, so this
+        # now parses correctly regardless, but the explicit format avoids
+        # pandas' "which format is this?" warning on every load.
+        df["date"] = pd.to_datetime(df["date"], errors="coerce", format="%Y-%m-%d")
 
     if "market_value_in_eur" in df.columns:
         df["market_value_in_eur"] = pd.to_numeric(

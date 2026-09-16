@@ -10,9 +10,8 @@ from utils import (
     get_pl_club_ids, get_pl_transfers,
     season_spending_trend, top_spending_clubs,
     trading_efficiency_by_club, completed_seasons, season_biggest_bargain,
-    club_badge_style,
+    club_badge_style, format_eur_m,
 )
-from styles import format_eur_m
 
 st.set_page_config(page_title="Soccernomics — Overview", page_icon="\u26bd", layout="wide")
 styles.inject()
