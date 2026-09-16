@@ -1,0 +1,4 @@
+data/raw/*.zip
+data/raw/appearances.csv
+.streamlit/secrets.toml
+__pycache__/
