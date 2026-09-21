@@ -8,14 +8,14 @@ from typing import Any
 import streamlit as st
 
 try:
-    from google import genai  # type: ignore # pyright: ignore [reportMissingImports]
-    # pyrefly: ignore [missing-import]
-    from google.genai import types  # type: ignore # pyright: ignore [reportMissingImports]
+    from google import genai
+    from google.genai import types
 except ImportError:  # pragma: no cover
     genai = None
     types = None
 
 GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image"
 
 
 def get_gemini_api_key() -> str | None:
@@ -94,11 +94,7 @@ def get_ai_player_research(
     season: str,
     competition: str = "Premier League",
 ) -> dict[str, Any]:
-    """Research a player using Gemini grounded in Google Search.
-
-    This is a FALLBACK, not the primary stats source — the page should
-    prefer local, real, deterministic data (playerstats.csv) wherever it
-    covers a field, and only call this for fields/players it doesn't."""
+    """Research a player using Gemini grounded in Google Search."""
     key = get_gemini_api_key()
     if not key:
         return {"ok": False, "error": "GEMINI_API_KEY is not configured."}
@@ -126,11 +122,25 @@ SOURCE PRIORITY:
 CURRENT-SEASON RULES:
 - The season may be live and different sites may update at different times.
 - Prefer one coherent, recently updated source for related statistics.
+- For the exact player page, search FotMob first for minutes, shots and shots on target; use StatMuse/FBref/other specialist sources to cross-check when needed.
+- If a requested field is missing after the first search, perform a second targeted search for that exact field (for example: "{player_name} Premier League 2026/27 minutes" or "{player_name} Premier League 2026/27 shots on target").
+- Do not leave a field null merely because it was absent from the first search result. Search again before concluding it is unavailable.
 - Never average conflicting values.
 - Never use another competition or another season to fill a missing value.
-- If a value cannot be verified, return null.
+- If a value still cannot be verified after targeted searches, return null and explain that limitation.
 - For passes, use the provider's clearly defined completed/successful-pass
   total when available and state the definition in statistics_notes.
+- For minutes and shots on target, return the season total when the source provides it, not a per-90 rate or percentage.
+- Keep shots and shots on target as raw totals.
+
+HEATMAP RESEARCH:
+- Search explicitly for a published player heatmap/activity map for the exact
+  season. Search FlickStat and FotMob first, then other specialist providers.
+- If an exact-season player page visibly contains a Heatmap/activity section,
+  it is valid evidence even if the visual is embedded in the page.
+- Record the page URL, publisher, map type and what the map appears to show.
+- If no published heatmap can be verified, return found=false.
+- Do not fabricate a heatmap URL.
 
 Return JSON only:
 {{
@@ -155,6 +165,15 @@ Return JSON only:
   }},
   "statistics_notes": "",
   "statistics_sources": [],
+  "heatmap": {{
+    "found": false,
+    "url": null,
+    "source_name": null,
+    "heatmap_type": null,
+    "description": "",
+    "exact_season_verified": false
+  }},
+  "heatmap_sources": [],
   "scouting_summary": "",
   "limitations": ""
 }}
@@ -181,7 +200,9 @@ Return JSON only:
         if grounded:
             existing = result.get("statistics_sources") or []
             existing_urls = {x.get("url") for x in existing if isinstance(x, dict)}
-            result["statistics_sources"] = existing + [s for s in grounded if s["url"] not in existing_urls]
+            result["statistics_sources"] = existing + [
+                s for s in grounded if s["url"] not in existing_urls
+            ]
             result["grounding_sources"] = grounded
         else:
             result.setdefault("grounding_sources", [])
@@ -191,6 +212,145 @@ Return JSON only:
 
     except Exception as exc:
         return {"ok": False, "error": f"Gemini request failed: {exc}"}
+
+
+def generate_ai_heatmap(
+    player_name: str,
+    season: str,
+    research: dict[str, Any],
+    competition: str = "Premier League",
+) -> dict[str, Any]:
+    """Generate a qualitative, web-grounded player activity heatmap.
+
+    This is deliberately labelled as an AI estimate. It is not a replacement
+    for event/tracking coordinates and must never be presented as raw data.
+    """
+    key = get_gemini_api_key()
+    if not key:
+        return {"ok": False, "error": "GEMINI_API_KEY is not configured."}
+    if genai is None or types is None:
+        return {"ok": False, "error": "google-genai is not installed. Run: pip install -U google-genai"}
+
+    stats = research.get("statistics") or {}
+    heatmap = research.get("heatmap") or {}
+    sources = research.get("grounding_sources") or research.get("statistics_sources") or []
+    source_text = "\n".join(
+        f"- {s.get('title', 'Source')}: {s.get('url', '')}"
+        for s in sources[:10]
+        if isinstance(s, dict) and s.get("url")
+    )
+
+    evidence = json.dumps(
+        {
+            "player": player_name,
+            "season": season,
+            "competition": competition,
+            "statistics": stats,
+            "published_heatmap_evidence": heatmap,
+            "scouting_summary": research.get("scouting_summary", ""),
+        },
+        ensure_ascii=False,
+    )
+
+    prompt = f"""
+Create a clean football analytics visual: an AI-estimated activity heatmap for
+{player_name} in the {competition} {season} season.
+
+IMPORTANT:
+This is an ESTIMATE based on public football-statistics evidence. It is NOT raw
+tracking data, not a coordinate-derived event map, and must not pretend to show
+exact event counts. Use the web-grounded evidence below to infer the player's
+qualitative spatial tendencies and role.
+
+Research evidence:
+{evidence}
+
+Relevant web sources:
+{source_text}
+
+Use Google Search grounding to sanity-check the player's role and the season if
+needed. Generate a professional, dark-theme football analytics graphic:
+- full horizontal football pitch
+- realistic pitch markings
+- soft density/heat zones rather than discrete dots
+- strongest density where the evidence indicates the player operates most
+- weaker secondary zones around supporting areas
+- attacking direction toward the right
+- no player photograph
+- no club badge
+- no decorative footballer illustration
+- minimal clean title: "{player_name} · {season}"
+- subtitle: "AI-estimated activity heatmap"
+- include a small legend from low to high activity
+- do not print fake numerical percentages, fake coordinates, fake touch counts,
+  or fake event totals
+- prioritize a useful tactical visualization over artistic decoration
+
+The result should look like a professional football analytics dashboard asset,
+not a generic poster.
+"""
+
+    try:
+        client = genai.Client(api_key=key)
+        response = client.models.generate_content(
+            model=GEMINI_IMAGE_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"],
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                image_config=types.ImageConfig(aspect_ratio="16:9"),
+            ),
+        )
+
+        image_bytes = None
+        text_parts: list[str] = []
+        candidates = getattr(response, "candidates", None) or []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            parts = getattr(content, "parts", None) if content else None
+            for part in parts or []:
+                text = getattr(part, "text", None)
+                if text:
+                    text_parts.append(text)
+                inline = getattr(part, "inline_data", None)
+                if inline is None:
+                    inline = getattr(part, "inlineData", None)
+                if inline is not None:
+                    data = getattr(inline, "data", None)
+                    if data:
+                        image_bytes = data
+                        break
+            if image_bytes:
+                break
+
+        if image_bytes is None:
+            # Some SDK versions expose generated parts directly.
+            for part in getattr(response, "parts", None) or []:
+                inline = getattr(part, "inline_data", None) or getattr(part, "inlineData", None)
+                if inline is not None and getattr(inline, "data", None):
+                    image_bytes = inline.data
+                    break
+
+        if not image_bytes:
+            return {"ok": False, "error": "Gemini did not return an image for the heatmap request."}
+
+        if not isinstance(image_bytes, bytes):
+            image_bytes = bytes(image_bytes)
+
+        return {
+            "ok": True,
+            "player": player_name,
+            "season": season,
+            "competition": competition,
+            "image_bytes": image_bytes,
+            "model": GEMINI_IMAGE_MODEL,
+            "note": "AI-estimated from web-grounded public evidence; not raw tracking/event data.",
+            "sources": _grounding_sources(response),
+            "model_text": " ".join(text_parts).strip(),
+        }
+
+    except Exception as exc:
+        return {"ok": False, "error": f"AI heatmap generation failed: {exc}"}
 
 
 def clear_gemini_cache() -> None:

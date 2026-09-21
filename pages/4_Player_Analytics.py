@@ -35,6 +35,48 @@ from utils import (
 )
 from gemini_utils import get_ai_player_research
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_current_player_stats(player_name):
+    """Fetch current 2026/27 Premier League performance research via Gemini."""
+    try:
+        result = get_ai_player_research(
+            player_name,
+            "2026/27",
+            "Premier League",
+        )
+        return result if isinstance(result, dict) else {}
+    except Exception:
+        return {}
+
+
+def stat_value(data, *keys):
+    """Read a stat safely from Gemini's nested statistics payload."""
+    if not isinstance(data, dict):
+        return "—"
+
+    statistics = data.get("statistics")
+    if not isinstance(statistics, dict):
+        statistics = data
+
+    for key in keys:
+        value = statistics.get(key)
+        if value is not None and str(value).strip() not in {"", "None", "nan", "null"}:
+            return value
+
+    return "—"
+
+
+def numeric_stat(data, *keys):
+    """Return a numeric Gemini stat when it can be safely converted."""
+    value = stat_value(data, *keys)
+    if value == "—":
+        return None
+    try:
+        return float(str(value).replace(",", "").replace("%", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
 
 st.set_page_config(
     page_title="Soccernomics — Player Analytics",
@@ -466,6 +508,8 @@ transfers_player = get_player_transfer_history(transfers, player_id) if is_local
 wage_rows = get_player_wage_history(wages, selected_name) if is_local_player else pd.DataFrame()
 perf_summary = get_player_performance_history(appearances_summary, player_id) if is_local_player else {}
 
+current_stats = get_current_player_stats(selected_name)
+
 position = map_position(player)
 position_label = role_name(position)
 club = selected_club or safe(player.get("current_club_name"), "Club unavailable")
@@ -568,8 +612,8 @@ st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 # Performance & Cost Efficiency (From local appearances.csv)
 # ============================================================
 
-styles.section_label("Local Performance & Cost-Per-Output Analysis")
-st.caption("Aggregated match data from historical appearances dataset.")
+styles.section_label("Historical Performance & Transfer-Cost Context")
+st.caption("Historical performance from the available local appearances dataset.")
 
 if perf_summary:
     p1, p2, p3, p4, p5, p6 = st.columns(6)
@@ -583,12 +627,128 @@ if perf_summary:
         styles.kpi_card("Minutes Played", f"{perf_summary['total_minutes']:,} mins")
     with p5:
         c_goal = cost_efficiency.get("cost_per_goal")
-        styles.kpi_card("Transfer Fee / Goal", format_eur_m(c_goal) if pd.notna(c_goal) else "—", "fee per goal scored")
+        styles.kpi_card("Acquisition Fee / Goal", format_eur_m(c_goal) if pd.notna(c_goal) else "—", "descriptive historical ratio")
     with p6:
         c_min = cost_efficiency.get("cost_per_minute")
-        styles.kpi_card("Transfer Fee / Minute", f"€{c_min:,.0f}/min" if pd.notna(c_min) and c_min > 0 else "—", "fee per minute on pitch")
+        styles.kpi_card("Acquisition Fee / Minute", f"€{c_min:,.0f}/min" if pd.notna(c_min) and c_min > 0 else "—", "descriptive historical ratio")
 else:
     st.caption("No local appearance records available for this player.")
+
+st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
+
+
+# ============================================================
+# Current Season Performance — Gemini
+# ============================================================
+
+styles.section_label("Current Performance · 2026/27")
+st.caption("Premier League current-season figures researched with Gemini and web grounding.")
+
+current_source = (
+    current_stats.get("primary_stats_source")
+    if isinstance(current_stats, dict)
+    else None
+)
+data_as_of = (
+    current_stats.get("data_as_of")
+    if isinstance(current_stats, dict)
+    else None
+)
+
+if current_source or data_as_of:
+    source_text = f"Source: {current_source or 'Gemini web-grounded research'}"
+    if data_as_of:
+        source_text += f" · Data as of {data_as_of}"
+    st.caption(source_text)
+
+if current_stats:
+    cp1, cp2, cp3, cp4 = st.columns(4, gap="medium")
+    st.markdown("<div style='height:0.65rem'></div>", unsafe_allow_html=True)
+    cp5, cp6, cp7, cp8 = st.columns(4, gap="medium")
+
+    with cp1:
+        styles.kpi_card("Appearances", str(stat_value(current_stats, "appearances", "apps")))
+    with cp2:
+        styles.kpi_card("Minutes", str(stat_value(current_stats, "minutes", "mins")))
+    with cp3:
+        styles.kpi_card("Goals", str(stat_value(current_stats, "goals")))
+    with cp4:
+        styles.kpi_card("Assists", str(stat_value(current_stats, "assists")))
+    with cp5:
+        styles.kpi_card("Shots", str(stat_value(current_stats, "shots")))
+    with cp6:
+        styles.kpi_card(
+            "On Target",
+            str(stat_value(current_stats, "shots_on_target", "shots_on_target_count", "on_target")),
+        )
+    with cp7:
+        styles.kpi_card("xG", str(stat_value(current_stats, "xg", "expected_goals")))
+    with cp8:
+        styles.kpi_card("xA", str(stat_value(current_stats, "xa", "expected_assists")))
+
+    current_limitations = (
+        current_stats.get("limitations")
+        if isinstance(current_stats, dict)
+        else None
+    )
+    if current_limitations:
+        st.caption(str(current_limitations))
+
+    # A single analytical visual: compare actual output with modelled expectation.
+    # This adds interpretation without introducing another unrelated metric block.
+    goals = numeric_stat(current_stats, "goals")
+    xg = numeric_stat(current_stats, "xg", "expected_goals")
+    assists = numeric_stat(current_stats, "assists")
+    xa = numeric_stat(current_stats, "xa", "expected_assists")
+
+    comparison = []
+    if goals is not None and xg is not None:
+        comparison.append(("Goals", goals, xg))
+    if assists is not None and xa is not None:
+        comparison.append(("Assists", assists, xa))
+
+    if comparison:
+        st.markdown("<div style='height:0.9rem'></div>", unsafe_allow_html=True)
+        styles.section_label("Current Output vs Expected")
+        chart_df = pd.DataFrame(comparison, columns=["Metric", "Actual", "Expected"])
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            name="Actual",
+            x=chart_df["Metric"],
+            y=chart_df["Actual"],
+            marker_color=GREEN,
+            text=[f"{v:g}" for v in chart_df["Actual"]],
+            textposition="outside",
+        ))
+        fig.add_trace(go.Bar(
+            name="Expected",
+            x=chart_df["Metric"],
+            y=chart_df["Expected"],
+            marker_color=AMBER,
+            text=[f"{v:g}" for v in chart_df["Expected"]],
+            textposition="outside",
+        ))
+        fig.update_layout(
+            barmode="group",
+            height=280,
+            margin=dict(l=10, r=10, t=18, b=10),
+            paper_bgcolor=PLOT_BG,
+            plot_bgcolor=PLOT_BG,
+            font=dict(color=TEXT),
+            legend=dict(orientation="h", y=1.08, x=0),
+            xaxis=dict(showgrid=False, linecolor=GRID),
+            yaxis=dict(showgrid=True, gridcolor=GRID, zeroline=False, title="Total"),
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.caption("Positive gap means recorded output is above the provider's expected output; this is descriptive, not a player-quality score.")
+
+    st.caption(
+        "Current-season figures can change as matches are played. "
+        "They are kept separate from the historical local performance dataset."
+    )
+else:
+    st.caption("Current-season performance data is unavailable for this player right now.")
 
 st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
 
@@ -597,23 +757,23 @@ st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
 # Player Accounting & Contract Amortisation Impact
 # ============================================================
 
-styles.section_label("Player Accounting & Annual Club P&L Burden")
-st.caption("Annual financial impact on club income statement (Transfer Fee Amortisation + Annual Wage Expense).")
+styles.section_label("Player Cost Context")
+st.caption("Illustrative cost context based on the recorded acquisition fee and latest annual wage estimate.")
 
 if pd.notna(largest_fee) and largest_fee > 0:
     ann_amort = largest_fee / 5.0
-    ann_wage_eur = (annual_wage * 1.18) if pd.notna(annual_wage) else 0.0
+    ann_wage_eur = annual_wage if pd.notna(annual_wage) else 0.0
     total_pl_impact = ann_amort + ann_wage_eur
 
     f1, f2, f3, f4 = st.columns(4)
     with f1:
         styles.kpi_card("Acquisition Fee", format_eur_m(largest_fee), "recorded transfer fee")
     with f2:
-        styles.kpi_card("Annual Amortisation", format_eur_m(ann_amort), "5-year straight-line depreciation")
+        styles.kpi_card("Illustrative Annual Amortisation", format_eur_m(ann_amort), "5-year assumption")
     with f3:
         styles.kpi_card("Annual Wage Commitment", money_gbp(annual_wage) if pd.notna(annual_wage) else "—", "base salary estimate")
     with f4:
-        styles.kpi_card("Annual Club P&L Hit", format_eur_m(total_pl_impact), "Amortisation + Wage Charge")
+        styles.kpi_card("Illustrative Annual Cost", format_eur_m(total_pl_impact), "Assumed amortisation + wage")
 else:
     st.caption("No paid acquisition fee on record to compute contract amortisation.")
 
@@ -709,17 +869,68 @@ with transfer_col:
 
         if not transfers_player.empty:
             rows = transfers_player.copy()
-            rows["Date"] = pd.to_datetime(rows["transfer_date"], errors="coerce").dt.strftime("%b %Y")
-            rows["Fee"] = pd.to_numeric(rows["transfer_fee"], errors="coerce").apply(
-                lambda x: format_eur_m(x) if pd.notna(x) and x > 0 else "Free / Undisclosed"
+            rows["Date"] = pd.to_datetime(
+                rows["transfer_date"], errors="coerce"
+            ).dt.strftime("%b %Y")
+
+            rows["_fee"] = pd.to_numeric(
+                rows["transfer_fee"], errors="coerce"
             )
-            rows["Market Value"] = pd.to_numeric(rows["market_value_in_eur"], errors="coerce").apply(
-                lambda x: format_eur_m(x) if pd.notna(x) and x > 0 else "—"
+            rows["_mv"] = pd.to_numeric(
+                rows["market_value_in_eur"], errors="coerce"
             )
-            display = rows[["Date", "from_club_name", "to_club_name", "Fee", "Market Value"]].rename(
-                columns={"from_club_name": "From Club", "to_club_name": "To Club"}
+
+            rows["_value_gap"] = rows["_mv"] - rows["_fee"]
+            rows["_fee_to_mv"] = np.where(
+                rows["_mv"] > 0,
+                rows["_fee"] / rows["_mv"],
+                np.nan,
             )
-            st.dataframe(display, hide_index=True, width="stretch", height=280)
+
+            rows["Fee"] = rows["_fee"].apply(
+                lambda x: format_eur_m(x)
+                if pd.notna(x) and x > 0
+                else "Free / Undisclosed"
+            )
+            rows["Market Value"] = rows["_mv"].apply(
+                lambda x: format_eur_m(x)
+                if pd.notna(x) and x > 0
+                else "—"
+            )
+            rows["Value Gap"] = rows["_value_gap"].apply(
+                lambda x: format_eur_m(x) if pd.notna(x) else "—"
+            )
+            rows["Fee / MV"] = rows["_fee_to_mv"].apply(
+                lambda x: f"{x:.0%}" if pd.notna(x) else "—"
+            )
+
+            display = rows[
+                [
+                    "Date",
+                    "from_club_name",
+                    "to_club_name",
+                    "Fee",
+                    "Market Value",
+                    "Value Gap",
+                    "Fee / MV",
+                ]
+            ].rename(
+                columns={
+                    "from_club_name": "From Club",
+                    "to_club_name": "To Club",
+                }
+            )
+
+            st.dataframe(
+                display,
+                hide_index=True,
+                width="stretch",
+                height=280,
+            )
+            st.caption(
+                "Value Gap = recorded market value minus transfer fee. "
+                "Fee / MV compares the recorded transfer fee with the recorded market value at the transfer."
+            )
         else:
             st.caption("No transfer history records found for this player.")
 
@@ -728,9 +939,12 @@ st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 with st.expander("Methodology & Disclosures"):
     st.markdown(
         """
-        - **Local Performance Metrics:** Aggregated directly from `appearances.csv` covering domestic and European matches.
-        - **Cost-Per-Output:** Evaluates Total Acquisition Fees relative to total goals, assists, and minutes on pitch.
-        - **Valuations & Wages:** Sourced from Transfermarkt historical valuations and Premier League wage dataset.
+        - **Historical Performance Metrics:** Aggregated from the available local appearances dataset.
+        - **Current Performance:** 2026/27 Premier League figures are researched with Gemini and web grounding and may change during the season.
+        - **Cost-Per-Output:** Acquisition fee divided by recorded goals, assists, or minutes; this is a descriptive ratio, not profitability or player-quality scoring.
+        - **Transfer Economics:** Value Gap = recorded market value minus transfer fee; Fee / MV = transfer fee divided by recorded market value.
+        - **Player Cost Context:** Illustrative annual amortisation uses a 5-year assumption. Actual accounting depends on contract terms and club accounting policies.
+        - **Valuations & Wages:** Sourced from the available historical valuation and Premier League wage datasets.
         """
     )
 
