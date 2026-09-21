@@ -1,3 +1,7 @@
+# ============================================================
+# SOCCERNOMICS — PLAYER ANALYTICS & PERFORMANCE ROI
+# ============================================================
+
 import os
 import re
 import sys
@@ -18,11 +22,16 @@ from utils import (
     load_transfers,
     load_player_valuations,
     load_player_wages,
+    load_player_appearances_summary,
+    get_player_performance_history,
+    calculate_player_cost_per_performance,
     get_player_valuation_history,
     get_player_transfer_history,
     player_career_financial_summary,
     get_player_wage_history,
     format_eur_m,
+    player_peak_vs_current,
+    market_value_by_age_distribution,
 )
 from gemini_utils import get_ai_player_research
 
@@ -31,13 +40,24 @@ st.set_page_config(
     page_title="Soccernomics — Player Analytics",
     page_icon="⚽",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 styles.inject()
+styles.render_sidebar()
+
+
+PLOT_BG = "rgba(0,0,0,0)"
+GRID = "#1E2823"
+TEXT = "#EAF2ED"
+MUTED = "#8FA398"
+GREEN = "#2FBF71"
+AMBER = "#E8B75D"
+RED = "#E06B6B"
+BLUE = "#5B9BD5"
 
 
 # ============================================================
-# Small page-only helpers
+# Helpers
 # ============================================================
 
 def norm(value):
@@ -109,11 +129,7 @@ def role_name(position):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_current_pl_roster():
-    """Fetch the current Premier League fantasy roster for player discovery only.
-
-    We intentionally do not use the FPL performance fields here. Current-season
-    performance is still sourced through Gemini's grounded research layer.
-    """
+    """Fetch current Premier League roster for live player discovery."""
     url = "https://fantasy.premierleague.com/api/bootstrap-static/"
     try:
         req = Request(
@@ -123,7 +139,7 @@ def load_current_pl_roster():
                 "Accept": "application/json",
             },
         )
-        with urlopen(req, timeout=8) as response:
+        with urlopen(req, timeout=6) as response:
             payload = response.read().decode("utf-8")
         data = __import__("json").loads(payload)
 
@@ -158,29 +174,10 @@ def load_current_pl_roster():
         if roster.empty:
             return roster
 
-        return roster.drop_duplicates(
-            subset=["name", "club"]
-        ).reset_index(drop=True)
+        return roster.drop_duplicates(subset=["name", "club"]).reset_index(drop=True)
 
     except Exception:
         return pd.DataFrame()
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def cached_player_research(player_name, season="2026/27"):
-    """Gemini is used for current-season football performance only."""
-    try:
-        return get_ai_player_research(
-            player_name,
-            season,
-            "Premier League",
-        )
-    except Exception as exc:
-        return {
-            "ok": False,
-            "statistics": {},
-            "limitations": f"Research unavailable: {exc}",
-        }
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -201,7 +198,7 @@ def load_heatmaps():
 
 
 def pitch_shapes():
-    line = "#91A79C"
+    line = "#2D3D35"
     return [
         dict(type="rect", x0=0, y0=0, x1=105, y1=68, line=dict(color=line, width=1.2)),
         dict(type="line", x0=52.5, y0=0, x1=52.5, y1=68, line=dict(color=line, width=1)),
@@ -224,7 +221,7 @@ def heatmap_chart(df):
             nbinsx=32,
             nbinsy=21,
             colorscale=[
-                [0, "rgba(8,20,15,.02)"],
+                [0, "rgba(18,24,21,.02)"],
                 [.18, "#0D4A30"],
                 [.38, "#12834F"],
                 [.58, "#19BA73"],
@@ -233,7 +230,7 @@ def heatmap_chart(df):
                 [1, "#FF5D52"],
             ],
             showscale=False,
-            hovertemplate="Role activity: %{z:.1f}<extra></extra>",
+            hovertemplate="Role activity density: %{z:.1f}<extra></extra>",
         )
     )
     for shape in pitch_shapes():
@@ -241,8 +238,8 @@ def heatmap_chart(df):
     fig.update_layout(
         height=310,
         margin=dict(l=3, r=3, t=3, b=3),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="#08160F",
+        paper_bgcolor=PLOT_BG,
+        plot_bgcolor="#0E1411",
         xaxis=dict(visible=False, range=[-1, 106], fixedrange=True),
         yaxis=dict(
             visible=False,
@@ -273,93 +270,25 @@ def line_chart(df, x, y, color, y_title, height=270, hover=None):
     fig.update_layout(
         height=height,
         margin=dict(l=8, r=8, t=8, b=8),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#D7E4DE", size=9),
-        xaxis=dict(gridcolor="#223029", zeroline=False),
-        yaxis=dict(gridcolor="#223029", zeroline=False, title=y_title),
+        paper_bgcolor=PLOT_BG,
+        plot_bgcolor=PLOT_BG,
+        font=dict(color=TEXT, size=9),
+        xaxis=dict(gridcolor=GRID, zeroline=False),
+        yaxis=dict(gridcolor=GRID, zeroline=False, title=y_title),
         showlegend=False,
     )
     return fig
 
 
-def transfer_value_chart(df):
-    fig = go.Figure()
-    labels = [d.strftime("%Y") for d in df["date"]]
-    fig.add_trace(
-        go.Bar(
-            x=labels,
-            y=df["fee"] / 1_000_000,
-            name="Transfer fee",
-            marker_color="#5B9BD5",
-            hovertemplate="%{x}<br>Fee: €%{y:.1f}M<extra></extra>",
-        )
-    )
-    fig.add_trace(
-        go.Bar(
-            x=labels,
-            y=df["market_value"] / 1_000_000,
-            name="Market value at move",
-            marker_color="#2FBF71",
-            hovertemplate="%{x}<br>Market value: €%{y:.1f}M<extra></extra>",
-        )
-    )
-    fig.update_layout(
-        height=290,
-        barmode="group",
-        margin=dict(l=8, r=8, t=12, b=8),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#D7E4DE", size=9),
-        xaxis=dict(gridcolor="#223029"),
-        yaxis=dict(gridcolor="#223029", title="€M"),
-        legend=dict(orientation="h", y=1.08, x=0),
-    )
-    return fig
-
-
-def transfer_value_rows(transfers_player):
-    t = transfers_player.copy()
-    if t.empty:
-        return pd.DataFrame()
-    t["date"] = pd.to_datetime(t["transfer_date"], errors="coerce")
-    t["fee"] = pd.to_numeric(t["transfer_fee"], errors="coerce")
-    t["market_value"] = pd.to_numeric(t["market_value_in_eur"], errors="coerce")
-    t = t.dropna(subset=["date"])
-    t = t[t["fee"].notna() & (t["fee"] > 0)]
-    t = t.sort_values("date")
-    return t
-
-
-def performance_value(stats, key):
-    value = (stats or {}).get(key)
-    if value is None or pd.isna(value):
-        return "—"
-    try:
-        number = float(value)
-        if number.is_integer():
-            return str(int(number))
-        return f"{number:.2f}"
-    except Exception:
-        return safe(value)
-
-
-def performance_note(research):
-    if not research or not research.get("ok"):
-        return "Current-season performance could not be verified."
-    source = research.get("primary_stats_source") or "Grounded football-statistics sources"
-    as_of = research.get("data_as_of")
-    return f"Source: {source}" + (f" · as of {as_of}" if as_of else "")
-
-
 # ============================================================
-# Data
+# Data Loading
 # ============================================================
 
 players = load_players()
 transfers = load_transfers()
 valuations = load_player_valuations()
 wages = load_player_wages()
+appearances_summary = load_player_appearances_summary()
 heatmaps = load_heatmaps()
 
 searchable = (
@@ -373,9 +302,6 @@ if searchable.empty:
     st.error("players.csv contains no searchable player records.")
     st.stop()
 
-# The historical player database is retained for financial history.
-# Current PL discovery comes from the live FPL roster so recent signings/
-# registrations absent from players.csv (e.g. Gyökeres, João Pedro) are still searchable.
 current_pl = load_current_pl_roster()
 
 if not current_pl.empty:
@@ -383,8 +309,6 @@ if not current_pl.empty:
         current_pl["name"].map(norm) + " " + current_pl["web_name"].map(norm)
     )
     current_pl = current_pl.drop_duplicates(["name", "club"]).reset_index(drop=True)
-
-historical_names = searchable["name"].astype(str).tolist()
 
 if "player_search_query" not in st.session_state:
     st.session_state.player_search_query = "Erling Haaland"
@@ -395,13 +319,14 @@ if "player_search_results" not in st.session_state:
 if "selected_player_key" not in st.session_state:
     st.session_state.selected_player_key = "Erling Haaland|Manchester City|local"
 
+
 # ============================================================
-# Header + search
+# Header + Search Bar
 # ============================================================
 
 styles.header(
-    "Player Analytics",
-    "Market value, wages, transfer economics, performance and positional intelligence.",
+    "Player Analytics & Performance ROI",
+    "Market valuation trajectory, career transfer volume, wage history, and local performance efficiency.",
 )
 
 with st.form("player_search_form", clear_on_submit=False):
@@ -410,7 +335,7 @@ with st.form("player_search_form", clear_on_submit=False):
         query = st.text_input(
             "Search player",
             value=st.session_state.player_search_query,
-            placeholder="Type a player name...",
+            placeholder="Search player name (e.g. Haaland, Saka, Bruno Fernandes, Gyökeres)...",
         )
     with button_col:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
@@ -420,14 +345,11 @@ if submitted:
     q = norm(query)
     result_rows = []
 
-    # 1) Current PL roster first — this is what fixes Pedro/João Pedro/Gyökeres
-    # and other recent signings missing from the historical players.csv.
     if q and not current_pl.empty:
         current_matches = current_pl[
             current_pl["search_key"].str.contains(re.escape(q), regex=True, na=False)
         ].copy()
 
-        # Prefix matches first, then substring matches.
         current_matches["rank"] = current_matches.apply(
             lambda r: 0 if norm(r["name"]).startswith(q) or norm(r["web_name"]).startswith(q) else 1,
             axis=1,
@@ -444,7 +366,6 @@ if submitted:
                 }
             )
 
-    # 2) Historical database fallback/addition.
     if q:
         hist_matches = searchable[
             searchable["name"].map(norm).str.contains(re.escape(q), regex=True, na=False)
@@ -483,10 +404,7 @@ if submitted:
 results = st.session_state.player_search_results
 
 if not results:
-    st.warning(
-        "No player found. Try a current Premier League player name, "
-        "surname, or a shorter search."
-    )
+    st.warning("No matching player found. Try searching by surname or full name.")
     st.stop()
 
 labels = [r["label"] for r in results]
@@ -517,23 +435,14 @@ st.session_state.selected_player_key = (
     f"{selected_name}|{selected_club}|{selected_source}"
 )
 
+# Fetch local player record
 player_rows = searchable[searchable["name"].map(norm) == norm(selected_name)]
-
-# If the current PL roster contains a player absent from players.csv,
-# create a lightweight profile record. Financial history remains unavailable
-# rather than being fabricated.
 is_local_player = not player_rows.empty
 
 if is_local_player:
     player = player_rows.iloc[0]
     player_id = player["player_id"]
 else:
-    roster_rows = current_pl[
-        (current_pl["name"] == selected_name)
-        & (current_pl["club"] == selected_club)
-    ]
-    roster_row = roster_rows.iloc[0] if not roster_rows.empty else pd.Series(dtype=object)
-
     player = pd.Series(
         {
             "player_id": np.nan,
@@ -551,26 +460,11 @@ else:
     )
     player_id = np.nan
 
-valuation = (
-    get_player_valuation_history(valuations, player_id)
-    if is_local_player
-    else pd.DataFrame()
-)
-transfers_player = (
-    get_player_transfer_history(transfers, player_id)
-    if is_local_player
-    else pd.DataFrame()
-)
-wage_rows = (
-    get_player_wage_history(wages, selected_name)
-    if is_local_player
-    else pd.DataFrame()
-)
-financials = (
-    player_career_financial_summary(transfers, player_id)
-    if is_local_player
-    else {}
-)
+# Datasets
+valuation = get_player_valuation_history(valuations, player_id) if is_local_player else pd.DataFrame()
+transfers_player = get_player_transfer_history(transfers, player_id) if is_local_player else pd.DataFrame()
+wage_rows = get_player_wage_history(wages, selected_name) if is_local_player else pd.DataFrame()
+perf_summary = get_player_performance_history(appearances_summary, player_id) if is_local_player else {}
 
 position = map_position(player)
 position_label = role_name(position)
@@ -582,90 +476,31 @@ current_value = pd.to_numeric(player.get("market_value_in_eur"), errors="coerce"
 peak_value = pd.to_numeric(player.get("highest_market_value_in_eur"), errors="coerce")
 dob = pd.to_datetime(player.get("date_of_birth"), errors="coerce")
 age = int((pd.Timestamp.now() - dob).days / 365.25) if pd.notna(dob) else None
-contract = pd.to_datetime(player.get("contract_expiration_date"), errors="coerce")
+
+peak_analysis = player_peak_vs_current(current_value, peak_value)
 
 latest_wage = wage_rows.iloc[-1] if wage_rows is not None and not wage_rows.empty else None
-annual_wage = (
-    pd.to_numeric(latest_wage.get("annual_wage_gbp"), errors="coerce")
-    if latest_wage is not None
-    else np.nan
-)
-weekly_wage = (
-    pd.to_numeric(latest_wage.get("weekly_wage_gbp"), errors="coerce")
-    if latest_wage is not None
-    else np.nan
-)
+annual_wage = pd.to_numeric(latest_wage.get("annual_wage_gbp"), errors="coerce") if latest_wage is not None else np.nan
 
-paid_fees = (
-    pd.to_numeric(transfers_player.get("transfer_fee"), errors="coerce")
-    if not transfers_player.empty
-    else pd.Series(dtype=float)
-)
+paid_fees = pd.to_numeric(transfers_player.get("transfer_fee"), errors="coerce") if not transfers_player.empty else pd.Series(dtype=float)
 paid_fees = paid_fees[paid_fees > 0]
 paid_count = len(paid_fees)
 transfer_volume = paid_fees.sum() if paid_count else 0
 largest_fee = paid_fees.max() if paid_count else np.nan
 
-# ============================================================
-# Current-season performance — Gemini only
-# ============================================================
+cost_efficiency = calculate_player_cost_per_performance(transfer_volume, annual_wage, perf_summary)
 
-CURRENT_SEASON = "2026/27"
-
-with st.spinner(f"Researching {selected_name}'s {CURRENT_SEASON} Premier League statistics..."):
-    research = cached_player_research(selected_name, CURRENT_SEASON)
-
-stats = research.get("statistics", {}) if research and research.get("ok") else {}
-
-valuation = get_player_valuation_history(valuations, player_id)
-transfers_player = get_player_transfer_history(transfers, player_id)
-wage_rows = get_player_wage_history(wages, selected_name)
-financials = player_career_financial_summary(transfers, player_id)
-
-position = map_position(player)
-position_label = role_name(position)
-club = safe(player.get("current_club_name"), "Club unavailable")
-country = safe(player.get("country_of_citizenship"), "Country unavailable")
-image_url = safe(player.get("image_url"), "")
-
-current_value = pd.to_numeric(player.get("market_value_in_eur"), errors="coerce")
-peak_value = pd.to_numeric(player.get("highest_market_value_in_eur"), errors="coerce")
-dob = pd.to_datetime(player.get("date_of_birth"), errors="coerce")
-age = int((pd.Timestamp.now() - dob).days / 365.25) if pd.notna(dob) else None
-contract = pd.to_datetime(player.get("contract_expiration_date"), errors="coerce")
-
-latest_wage = wage_rows.iloc[-1] if wage_rows is not None and not wage_rows.empty else None
-annual_wage = (
-    pd.to_numeric(latest_wage.get("annual_wage_gbp"), errors="coerce")
-    if latest_wage is not None
-    else np.nan
-)
-weekly_wage = (
-    pd.to_numeric(latest_wage.get("weekly_wage_gbp"), errors="coerce")
-    if latest_wage is not None
-    else np.nan
-)
-
-paid_fees = (
-    pd.to_numeric(transfers_player.get("transfer_fee"), errors="coerce")
-    if not transfers_player.empty
-    else pd.Series(dtype=float)
-)
-paid_fees = paid_fees[paid_fees > 0]
-paid_count = len(paid_fees)
-transfer_volume = paid_fees.sum() if paid_count else 0
-largest_fee = paid_fees.max() if paid_count else np.nan
 
 # ============================================================
-# Hero
+# Hero Section
 # ============================================================
 
-hero_col, value_col = st.columns([3.6, 1.4], gap="small")
+hero_col, value_col = st.columns([3.5, 1.5], gap="small")
 
 with hero_col:
     img = (
         f'<img src="{image_url}" style="width:105px;height:105px;object-fit:cover;'
-        f'border-radius:10px;border:1px solid #2B3D34;">'
+        f'border-radius:10px;border:1px solid #1E2823;">'
         if image_url
         else ""
     )
@@ -673,9 +508,9 @@ with hero_col:
     st.markdown(
         f"""
         <div style="
-            border:1px solid #223029;
+            border:1px solid #1E2823;
             border-radius:12px;
-            background:linear-gradient(135deg,#101A15,#0D1511);
+            background:linear-gradient(135deg,#121815,#0B0F0D);
             padding:20px 22px;
             min-height:120px;
             display:flex;
@@ -687,17 +522,21 @@ with hero_col:
                 <div style="font-size:2rem;font-weight:800;color:#EAF2ED;line-height:1.05;">
                     {selected_name}
                 </div>
-                <div style="color:#91A79C;margin-top:8px;font-size:.9rem;">
+                <div style="color:#8FA398;margin-top:8px;font-size:.9rem;">
                     {club} · {position_label} · {country}
                 </div>
                 <div style="display:flex;gap:8px;margin-top:12px;">
-                    <span style="padding:4px 9px;border-radius:14px;background:#123522;
-                    border:1px solid #1D6B43;color:#61D89A;font-size:.72rem;">
+                    <span style="padding:4px 9px;border-radius:14px;background:#15241D;
+                    border:1px solid #1E3B2C;color:#2FBF71;font-size:.72rem;font-weight:600;">
                         {age if age is not None else "—"} yrs
                     </span>
-                    <span style="padding:4px 9px;border-radius:14px;background:#123522;
-                    border:1px solid #1D6B43;color:#61D89A;font-size:.72rem;">
+                    <span style="padding:4px 9px;border-radius:14px;background:#15241D;
+                    border:1px solid #1E3B2C;color:#2FBF71;font-size:.72rem;font-weight:600;">
                         {position}
+                    </span>
+                    <span style="padding:4px 9px;border-radius:14px;background:#18261E;
+                    border:1px solid #1E2823;color:#D7E4DE;font-size:.72rem;">
+                        {peak_analysis['status']}
                     </span>
                 </div>
             </div>
@@ -708,74 +547,92 @@ with hero_col:
 
 with value_col:
     if not is_local_player:
-        st.caption(
-            "Current PL roster found from the live FPL player registry. "
-            "This player is not present in the project's historical financial datasets."
-        )
+        st.caption("Found via current Premier League roster. Historical database records unavailable.")
+    peak_delta_text = (
+        "Career Peak"
+        if peak_analysis["is_at_peak"]
+        else f"{peak_analysis['pct_delta']:+.1f}% vs peak ({format_eur_m(peak_value)})"
+    )
     styles.kpi_card(
         "Current market value",
         format_eur_m(current_value) if pd.notna(current_value) else "—",
-        f"Peak: {format_eur_m(peak_value)}",
+        peak_delta_text,
+        delta_positive=peak_analysis["is_at_peak"],
     )
-    st.caption(f"Latest annual wage: {money_gbp(annual_wage)}")
+    st.caption(f"Latest wage estimate: {money_gbp(annual_wage)}/yr")
+
+st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+
 
 # ============================================================
-# Financial snapshot
+# Performance & Cost Efficiency (From local appearances.csv)
 # ============================================================
 
-styles.section_label("Financial Snapshot")
+styles.section_label("Local Performance & Cost-Per-Output Analysis")
+st.caption("Aggregated match data from historical appearances dataset.")
 
-kpi_values = [
-    ("Market value", format_eur_m(current_value) if pd.notna(current_value) else "—", "latest recorded"),
-    ("Peak value", format_eur_m(peak_value) if pd.notna(peak_value) else "—", "career high"),
-    ("Transfer volume", format_eur_m(transfer_volume) if is_local_player else "—", f"{paid_count} paid moves" if is_local_player else "not in local dataset"),
-    ("Largest fee", format_eur_m(largest_fee) if is_local_player and pd.notna(largest_fee) else "—", "recorded career move" if is_local_player else "not in local dataset"),
-    ("Annual wage", money_gbp(annual_wage) if is_local_player else "—", "latest wage record" if is_local_player else "not in local dataset"),
-]
+if perf_summary:
+    p1, p2, p3, p4, p5, p6 = st.columns(6)
+    with p1:
+        styles.kpi_card("Appearances", f"{perf_summary['total_appearances']:,}", "tracked matches")
+    with p2:
+        styles.kpi_card("Goals", f"{perf_summary['total_goals']:,}", f"{perf_summary['goals_per_90']:.2f} per 90m")
+    with p3:
+        styles.kpi_card("Assists", f"{perf_summary['total_assists']:,}", f"{perf_summary['assists_per_90']:.2f} per 90m")
+    with p4:
+        styles.kpi_card("Minutes Played", f"{perf_summary['total_minutes']:,} mins")
+    with p5:
+        c_goal = cost_efficiency.get("cost_per_goal")
+        styles.kpi_card("Transfer Fee / Goal", format_eur_m(c_goal) if pd.notna(c_goal) else "—", "fee per goal scored")
+    with p6:
+        c_min = cost_efficiency.get("cost_per_minute")
+        styles.kpi_card("Transfer Fee / Minute", f"€{c_min:,.0f}/min" if pd.notna(c_min) and c_min > 0 else "—", "fee per minute on pitch")
+else:
+    st.caption("No local appearance records available for this player.")
 
-cols = st.columns(5, gap="small")
-for col, (label, value, note) in zip(cols, kpi_values):
-    with col:
-        styles.kpi_card(label, value, note)
+st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
 
-st.markdown("<div style='height:.8rem'></div>", unsafe_allow_html=True)
-
-# ============================================================
-# Player performance
-# ============================================================
-
-styles.section_label(f"Player Performance · {CURRENT_SEASON}")
-
-perf_items = [
-    ("Appearances", performance_value(stats, "appearances")),
-    ("Minutes", performance_value(stats, "minutes")),
-    ("Goals", performance_value(stats, "goals")),
-    ("Assists", performance_value(stats, "assists")),
-    ("Shots", performance_value(stats, "shots")),
-    ("On target", performance_value(stats, "shots_on_target")),
-    ("xG", performance_value(stats, "xg")),
-    ("xA", performance_value(stats, "xa")),
-]
-
-cols = st.columns(8, gap="small")
-for col, (label, value) in zip(cols, perf_items):
-    with col:
-        styles.kpi_card(label, value)
-
-st.caption(performance_note(research))
 
 # ============================================================
-# Financial visuals
+# Player Accounting & Contract Amortisation Impact
 # ============================================================
 
-styles.section_label("Player Economics")
+styles.section_label("Player Accounting & Annual Club P&L Burden")
+st.caption("Annual financial impact on club income statement (Transfer Fee Amortisation + Annual Wage Expense).")
 
-value_col, wage_col = st.columns(2, gap="small")
+if pd.notna(largest_fee) and largest_fee > 0:
+    ann_amort = largest_fee / 5.0
+    ann_wage_eur = (annual_wage * 1.18) if pd.notna(annual_wage) else 0.0
+    total_pl_impact = ann_amort + ann_wage_eur
+
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        styles.kpi_card("Acquisition Fee", format_eur_m(largest_fee), "recorded transfer fee")
+    with f2:
+        styles.kpi_card("Annual Amortisation", format_eur_m(ann_amort), "5-year straight-line depreciation")
+    with f3:
+        styles.kpi_card("Annual Wage Commitment", money_gbp(annual_wage) if pd.notna(annual_wage) else "—", "base salary estimate")
+    with f4:
+        styles.kpi_card("Annual Club P&L Hit", format_eur_m(total_pl_impact), "Amortisation + Wage Charge")
+else:
+    st.caption("No paid acquisition fee on record to compute contract amortisation.")
+
+st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
+
+
+
+# ============================================================
+# Valuation & Wage Trajectories
+# ============================================================
+
+styles.section_label("Player Economics & Valuation Trajectory")
+
+value_col, wage_col = st.columns(2, gap="medium")
 
 with value_col:
     with styles.panel():
         styles.section_label("Market Value Trajectory")
-        st.caption("Recorded market-value history, independent of transfer fees.")
+        st.caption("Recorded Transfermarkt valuation history across career milestones.")
         if not valuation.empty:
             vd = valuation.copy()
             vd["date"] = pd.to_datetime(vd["date"], errors="coerce")
@@ -783,210 +640,103 @@ with value_col:
             vd = vd.dropna(subset=["date", "value_m"]).sort_values("date")
             if not vd.empty:
                 fig = line_chart(
-                    vd,
-                    "date",
-                    "value_m",
-                    "#2FBF71",
-                    "€M",
-                    hover="%{x|%b %Y}<br>€%{y:.1f}M<extra></extra>",
+                    vd, "date", "value_m", GREEN, "€M", hover="%{x|%b %Y}<br>€%{y:.1f}M<extra></extra>"
                 )
                 st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
         else:
-            st.caption("No market-value history available.")
+            st.caption("No market-value trajectory available for this player.")
 
 with wage_col:
     with styles.panel():
         styles.section_label("Wage Trajectory")
-        st.caption("Annual wages across the available wage dataset.")
+        st.caption("Annual wage commitments recorded across Premier League seasons.")
         if wage_rows is not None and not wage_rows.empty and "annual_wage_gbp" in wage_rows.columns:
             wd = wage_rows.copy()
             wd["annual_m"] = pd.to_numeric(wd["annual_wage_gbp"], errors="coerce") / 1_000_000
             wd = wd.dropna(subset=["annual_m"]).sort_values("season")
             if not wd.empty:
                 fig = line_chart(
-                    wd,
-                    "season",
-                    "annual_m",
-                    "#E8B75D",
-                    "£M / year",
-                    hover="%{x}<br>£%{y:.2f}M / year<extra></extra>",
+                    wd, "season", "annual_m", AMBER, "£M / year", hover="%{x}<br>£%{y:.2f}M / year<extra></extra>"
                 )
                 st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
         else:
-            st.caption("No wage history available for this player.")
+            st.caption("No wage trajectory available for this player.")
+
+st.markdown("<div style='height:1.2rem'></div>", unsafe_allow_html=True)
+
 
 # ============================================================
-# Positional intelligence + transfer economics
+# Positional Tactical Model
 # ============================================================
 
-heat_col, transfer_col = st.columns(2, gap="small")
+heat_col, transfer_col = st.columns(2, gap="medium")
 
 with heat_col:
     with styles.panel():
-        styles.section_label("Positional Heatmap")
-        st.caption(
-            "Synthetic role-based positional model — not event-level tracking. "
-            "Use the controls to compare positional styles."
-        )
+        styles.section_label("Positional Heatmap Profile")
+        st.caption("Tactical activity profile model for position and style.")
 
         if not heatmaps.empty:
-            available_positions = sorted(
-                heatmaps["position"].astype(str).unique().tolist()
-            )
+            available_positions = sorted(heatmaps["position"].astype(str).unique().tolist())
             default_position = position if position in available_positions else available_positions[0]
 
             shown_position = st.selectbox(
-                "Position",
+                "Tactical position",
                 available_positions,
                 index=available_positions.index(default_position),
                 format_func=lambda x: f"{role_name(x)} ({x})",
-                key=f"heat_position_{player_id}",
+                key=f"heat_pos_{selected_name}",
             )
 
-            role_data = heatmaps[
-                heatmaps["position"].astype(str) == shown_position
-            ]
+            role_data = heatmaps[heatmaps["position"].astype(str) == shown_position]
             styles_available = sorted(role_data["style"].astype(str).unique().tolist())
 
             chosen_style = st.selectbox(
                 "Role variation",
                 styles_available,
-                key=f"heat_style_{player_id}_{shown_position}",
+                key=f"heat_style_{selected_name}_{shown_position}",
             )
 
-            selected_heat = role_data[
-                role_data["style"].astype(str) == chosen_style
-            ]
-
-            st.plotly_chart(
-                heatmap_chart(selected_heat),
-                width="stretch",
-                config={"displayModeBar": False},
-            )
-            st.caption(
-                f"Modelled role: {role_name(shown_position)} · {chosen_style}"
-            )
+            selected_heat = role_data[role_data["style"].astype(str) == chosen_style]
+            st.plotly_chart(heatmap_chart(selected_heat), width="stretch", config={"displayModeBar": False})
         else:
-            st.warning("position_heatmaps_dataset.csv was not found.")
+            st.caption("Heatmap dataset unavailable.")
 
 with transfer_col:
     with styles.panel():
-        styles.section_label("Transfer Fee vs Market Value")
-        st.caption(
-            "Financial comparison at each recorded paid transfer. "
-            "A gap does not represent club profit."
-        )
+        styles.section_label("Career Transfer Ledger")
+        st.caption("Complete transfer history recorded in Transfermarkt dataset.")
 
-        tv = transfer_value_rows(transfers_player)
-
-        if not tv.empty:
-            fig = transfer_value_chart(tv)
-            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
-
-            priced = tv.dropna(subset=["market_value"])
-            if not priced.empty:
-                priced = priced.copy()
-                priced["gap_pct"] = (
-                    (priced["market_value"] - priced["fee"])
-                    / priced["market_value"]
-                    * 100
-                )
-                avg_gap = priced["gap_pct"].mean()
-                latest_gap = priced.iloc[-1]["gap_pct"]
-
-                a, b = st.columns(2)
-                with a:
-                    styles.kpi_card(
-                        "Avg value discount",
-                        f"{avg_gap:+.1f}%",
-                        "market value vs fee",
-                    )
-                with b:
-                    styles.kpi_card(
-                        "Latest value gap",
-                        f"{latest_gap:+.1f}%",
-                        "latest priced move",
-                    )
+        if not transfers_player.empty:
+            rows = transfers_player.copy()
+            rows["Date"] = pd.to_datetime(rows["transfer_date"], errors="coerce").dt.strftime("%b %Y")
+            rows["Fee"] = pd.to_numeric(rows["transfer_fee"], errors="coerce").apply(
+                lambda x: format_eur_m(x) if pd.notna(x) and x > 0 else "Free / Undisclosed"
+            )
+            rows["Market Value"] = pd.to_numeric(rows["market_value_in_eur"], errors="coerce").apply(
+                lambda x: format_eur_m(x) if pd.notna(x) and x > 0 else "—"
+            )
+            display = rows[["Date", "from_club_name", "to_club_name", "Fee", "Market Value"]].rename(
+                columns={"from_club_name": "From Club", "to_club_name": "To Club"}
+            )
+            st.dataframe(display, hide_index=True, width="stretch", height=280)
         else:
-            st.caption("No paid transfer records with comparable market values.")
+            st.caption("No transfer history records found for this player.")
 
-# ============================================================
-# Transfer history
-# ============================================================
+st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
-styles.section_label("Transfer History")
-
-with styles.panel():
-    if not transfers_player.empty:
-        rows = transfers_player.copy()
-        rows["Date"] = pd.to_datetime(rows["transfer_date"], errors="coerce").dt.strftime("%b %Y")
-        rows["Fee"] = pd.to_numeric(rows["transfer_fee"], errors="coerce").apply(
-            lambda x: format_eur_m(x) if pd.notna(x) and x > 0 else "Free / undisclosed"
-        )
-        rows["Market value"] = pd.to_numeric(
-            rows["market_value_in_eur"], errors="coerce"
-        ).apply(lambda x: format_eur_m(x) if pd.notna(x) else "—")
-        display = rows[
-            ["Date", "from_club_name", "to_club_name", "Fee", "Market value"]
-        ].rename(
-            columns={
-                "from_club_name": "From",
-                "to_club_name": "To",
-            }
-        )
-        st.dataframe(display, hide_index=True, width="stretch")
-    else:
-        st.caption("No transfer history is available for this player.")
-
-# ============================================================
-# Current scouting research
-# ============================================================
-
-styles.section_label("Current Research")
-
-if research and research.get("ok"):
-    summary = research.get("scouting_summary")
-    notes = research.get("statistics_notes")
-    limitations = research.get("limitations")
-
-    if summary:
-        with styles.panel():
-            st.markdown(summary)
-
-    if notes:
-        st.caption(notes)
-
-    if limitations:
-        st.caption(f"Limitations: {limitations}")
-else:
-    st.caption(
-        "Gemini research is unavailable for this player. "
-        "Financial and positional sections above continue to use local project data."
-    )
-
-# ============================================================
-# Methodology
-# ============================================================
-
-with st.expander("Methodology & data limitations"):
+with st.expander("Methodology & Disclosures"):
     st.markdown(
         """
-        - **Player search:** current Premier League roster discovery comes from the live FPL player registry, while the historical `players.csv` remains available as a fallback. Only a small result set is rendered, avoiding a giant Streamlit selectbox.
-        - **Market value:** from the project's player valuation dataset.
-        - **Wages:** from the project's Premier League wage dataset.
-        - **Transfer economics:** compares recorded transfer fees with recorded
-          market values. This is not a measure of club profit.
-        - **Positional heatmap:** synthetic role-based positional model supplied for
-          the project. It is illustrative and is not player tracking data.
-        - **Performance:** current-season values are retrieved through Gemini's
-          grounded football-statistics research layer when available. Missing values
-          remain unavailable rather than being invented.
+        - **Local Performance Metrics:** Aggregated directly from `appearances.csv` covering domestic and European matches.
+        - **Cost-Per-Output:** Evaluates Total Acquisition Fees relative to total goals, assists, and minutes on pitch.
+        - **Valuations & Wages:** Sourced from Transfermarkt historical valuations and Premier League wage dataset.
         """
     )
 
 st.markdown(
     "<div style='height:1rem'></div><div style='text-align:center;color:#5C6E66;font-size:.75rem;'>"
-    "Soccernomics · Football. Data. Insights."
+    "Soccernomics · Football. Data. Economics."
     "</div>",
     unsafe_allow_html=True,
 )

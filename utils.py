@@ -1154,3 +1154,412 @@ def agent_leaderboard(players_df, top_n=10, min_players=3):
     )
     grouped = grouped[grouped["n_players"] >= min_players]
     return grouped.sort_values("total_value", ascending=False).head(top_n)
+
+
+# ---------------------------------------------------------------------------
+# TRANSFER ECONOMICS & VALUE GAP UTILITIES
+# ---------------------------------------------------------------------------
+
+def calculate_value_gap_and_premium(transfers_df):
+    """
+    Computes market value pricing metrics for transfers with both a recorded fee
+    and market valuation:
+      - value_gap = market_value_in_eur - transfer_fee (positive = bargain / below market value)
+      - premium_pct = (transfer_fee - market_value_in_eur) / market_value_in_eur * 100
+        (positive = premium paid over market value; negative = discount)
+      - pricing_tier = 'Premium (>15%)', 'Par (±15%)', 'Discount (<-15%)'
+    """
+    df = transfers_df.copy()
+    if df.empty:
+        return df
+
+    fee = pd.to_numeric(df.get("transfer_fee"), errors="coerce")
+    mv = pd.to_numeric(df.get("market_value_in_eur"), errors="coerce")
+
+    df["value_gap"] = mv - fee
+    df["premium_pct"] = np.where(
+        (mv.notna()) & (mv > 0) & (fee.notna()),
+        ((fee - mv) / mv) * 100,
+        np.nan,
+    )
+    df["discount_pct"] = np.where(
+        (mv.notna()) & (mv > 0) & (fee.notna()),
+        ((mv - fee) / mv) * 100,
+        np.nan,
+    )
+
+    def classify_tier(p):
+        if pd.isna(p):
+            return "Unpriced"
+        if p > 15:
+            return "Premium (>15%)"
+        elif p < -15:
+            return "Discount (<-15%)"
+        else:
+            return "Fair Value (±15%)"
+
+    df["pricing_tier"] = df["premium_pct"].apply(classify_tier)
+    return df
+
+
+def club_transfer_balance_matrix(pl_transfers, pl_ids, season=None):
+    """
+    Computes a comprehensive club transfer balance table:
+    Spending, Transfer Income, Net Spend, In Count, Out Count, Avg Buy, Avg Sale,
+    Largest Incoming, Largest Outgoing.
+    """
+    data = pl_transfers.copy()
+    if season is not None:
+        data = data[data["transfer_season"] == season]
+
+    # Paid transfers
+    paid = data[data["transfer_fee"].notna() & (data["transfer_fee"] > 0)]
+
+    incoming = paid[paid["to_club_id"].isin(pl_ids)]
+    outgoing = paid[paid["from_club_id"].isin(pl_ids)]
+
+    # Aggregate incoming
+    inc_agg = incoming.groupby("to_club_name").agg(
+        spending=("transfer_fee", "sum"),
+        buys_count=("transfer_fee", "count"),
+        avg_buy=("transfer_fee", "mean"),
+        max_buy=("transfer_fee", "max"),
+    )
+
+    # Aggregate outgoing
+    out_agg = outgoing.groupby("from_club_name").agg(
+        income=("transfer_fee", "sum"),
+        sales_count=("transfer_fee", "count"),
+        avg_sale=("transfer_fee", "mean"),
+        max_sale=("transfer_fee", "max"),
+    )
+
+    merged = pd.concat([inc_agg, out_agg], axis=1).fillna(0)
+    merged.index.name = "club"
+    merged = merged.reset_index()
+
+    merged["net_spend"] = merged["spending"] - merged["income"]
+    merged["total_trades"] = merged["buys_count"] + merged["sales_count"]
+
+    return merged.sort_values("spending", ascending=False).reset_index(drop=True)
+
+
+def player_peak_vs_current(current_val, peak_val):
+    """
+    Evaluates where a player's valuation sits relative to their career peak:
+      - absolute_delta = current_val - peak_val
+      - pct_delta = (current_val - peak_val) / peak_val * 100
+      - status = 'At Career Peak', 'Below Peak', or 'Unavailable'
+    """
+    c = pd.to_numeric(current_val, errors="coerce")
+    p = pd.to_numeric(peak_val, errors="coerce")
+
+    if pd.isna(c) or pd.isna(p) or p <= 0:
+        return {
+            "absolute_delta": np.nan,
+            "pct_delta": np.nan,
+            "status": "Unavailable",
+            "is_at_peak": False,
+        }
+
+    diff = float(c - p)
+    pct = float((diff / p) * 100)
+
+    if diff >= 0 or abs(diff) < 1e-4:
+        status = "At Career Peak"
+        is_at_peak = True
+    else:
+        status = f"{abs(pct):.1f}% below peak"
+        is_at_peak = False
+
+    return {
+        "absolute_delta": diff,
+        "pct_delta": pct,
+        "status": status,
+        "is_at_peak": is_at_peak,
+    }
+
+
+def market_value_by_age_distribution(valuations_df, players_df, target_age, position_group=None):
+    """
+    Extracts valuation statistics (25th, median, 75th, mean) for players around
+    a target age (±1 year) and optional positional group.
+    """
+    if valuations_df.empty or players_df.empty or pd.isna(target_age):
+        return None
+
+    # Merge players for position and dob
+    pl = players_df[["player_id", "date_of_birth", "position", "sub_position"]].dropna(subset=["date_of_birth"])
+    val = valuations_df.dropna(subset=["market_value_in_eur"]).copy()
+
+    # Get latest valuation per player
+    val["date"] = pd.to_datetime(val["date"], errors="coerce")
+    latest_val = val.sort_values("date").groupby("player_id").last().reset_index()
+
+    merged = latest_val.merge(pl, on="player_id", how="inner")
+    merged["dob"] = pd.to_datetime(merged["date_of_birth"], errors="coerce")
+    merged = merged.dropna(subset=["dob"])
+    merged["age"] = (pd.Timestamp.now() - merged["dob"]).dt.days / 365.25
+
+    # Filter age bracket (±1.5 years)
+    subset = merged[(merged["age"] >= target_age - 1.5) & (merged["age"] <= target_age + 1.5)]
+    if subset.empty:
+        return None
+
+    values = subset["market_value_in_eur"].dropna()
+    if len(values) < 5:
+        return None
+
+    return {
+        "count": len(values),
+        "median": float(values.median()),
+        "p25": float(values.quantile(0.25)),
+        "p75": float(values.quantile(0.75)),
+        "mean": float(values.mean()),
+        "max": float(values.max()),
+    }
+
+
+# ---------------------------------------------------------------------------
+# APPEARANCES & PERFORMANCE ROI UTILITIES
+# ---------------------------------------------------------------------------
+
+@st.cache_data
+def load_player_appearances_summary():
+    """
+    Loads raw/appearances.csv (~198MB) efficiently and returns a aggregated
+    summary dataframe by player_id and competition/season.
+    """
+    path = f"{RAW_DIR}/appearances.csv"
+    if not os.path.exists(path):
+        return pd.DataFrame()
+
+    usecols = [
+        "player_id", "game_id", "player_club_id", "date",
+        "goals", "assists", "minutes_played", "yellow_cards", "red_cards", "competition_id"
+    ]
+    try:
+        df = pd.read_csv(path, usecols=usecols)
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["year"] = df["date"].dt.year
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def get_player_performance_history(appearances_df, player_id):
+    """
+    Extracts career summary metrics from appearances.csv for a specific player_id:
+    Total Appearances, Total Goals, Total Assists, Total Minutes, Yellow Cards, Red Cards.
+    """
+    if appearances_df.empty or pd.isna(player_id):
+        return {}
+
+    pid = int(player_id)
+    p_df = appearances_df[appearances_df["player_id"] == pid]
+
+    if p_df.empty:
+        return {}
+
+    tot_apps = len(p_df)
+    tot_goals = p_df["goals"].sum()
+    tot_assists = p_df["assists"].sum()
+    tot_minutes = p_df["minutes_played"].sum()
+    tot_yellows = p_df["yellow_cards"].sum()
+    tot_reds = p_df["red_cards"].sum()
+
+    return {
+        "total_appearances": int(tot_apps),
+        "total_goals": int(tot_goals),
+        "total_assists": int(tot_assists),
+        "total_minutes": int(tot_minutes),
+        "total_yellow_cards": int(tot_yellows),
+        "total_red_cards": int(tot_reds),
+        "goals_per_90": (tot_goals / (tot_minutes / 90)) if tot_minutes > 0 else 0.0,
+        "assists_per_90": (tot_assists / (tot_minutes / 90)) if tot_minutes > 0 else 0.0,
+    }
+
+
+def calculate_player_cost_per_performance(transfer_volume_eur, annual_wage_gbp, perf_dict):
+    """
+    Calculates cost efficiency metrics: Cost per Goal, Cost per Minute, Cost per Goal+Assist.
+    """
+    if not perf_dict:
+        return {}
+
+    vol_eur = float(transfer_volume_eur or 0)
+    goals = perf_dict.get("total_goals", 0)
+    assists = perf_dict.get("total_assists", 0)
+    minutes = perf_dict.get("total_minutes", 0)
+    apps = perf_dict.get("total_appearances", 0)
+    g_plus_a = goals + assists
+
+    return {
+        "cost_per_goal": (vol_eur / goals) if goals > 0 else np.nan,
+        "cost_per_assist": (vol_eur / assists) if assists > 0 else np.nan,
+        "cost_per_contribution": (vol_eur / g_plus_a) if g_plus_a > 0 else np.nan,
+        "cost_per_minute": (vol_eur / minutes) if minutes > 0 else np.nan,
+        "cost_per_appearance": (vol_eur / apps) if apps > 0 else np.nan,
+    }
+
+
+# ---------------------------------------------------------------------------
+# CONTRACT AMORTISATION & FINANCIAL MODELING UTILITIES
+# ---------------------------------------------------------------------------
+
+def calculate_contract_amortisation(fee_eur, contract_years, weekly_wage_gbp=0, gbp_to_eur=1.18):
+    """
+    Calculates accounting amortisation schedule for a transfer:
+      - Annual Amortisation Charge = Fee / Contract Length
+      - Annual Wage Expense = Weekly Wage * 52
+      - Annual Total P&L Hit = Annual Amortisation + Annual Wage
+      - Book Value by Year t = Fee * (1 - t / Contract Length)
+    """
+    fee = float(fee_eur or 0)
+    years = max(1, int(contract_years or 5))
+    weekly_gbp = float(weekly_wage_gbp or 0)
+    annual_wage_eur = weekly_gbp * 52 * gbp_to_eur
+
+    annual_amortisation = fee / years
+    annual_pl_hit = annual_amortisation + annual_wage_eur
+
+    schedule = []
+    for y in range(0, years + 1):
+        bv = fee * (1 - (y / years))
+        cum_amort = annual_amortisation * y
+        cum_wage = annual_wage_eur * y
+        cum_total_cost = cum_amort + cum_wage
+
+        schedule.append({
+            "year": y,
+            "book_value_eur": max(0.0, float(bv)),
+            "cum_amortisation_eur": float(cum_amort),
+            "cum_wage_eur": float(cum_wage),
+            "cum_total_cost_eur": float(cum_total_cost),
+        })
+
+    return {
+        "fee_eur": fee,
+        "contract_years": years,
+        "annual_amortisation_eur": annual_amortisation,
+        "annual_wage_eur": annual_wage_eur,
+        "annual_pl_hit_eur": annual_pl_hit,
+        "schedule": pd.DataFrame(schedule),
+    }
+
+
+def disposal_profit_loss(fee_eur, contract_years, sale_year, sale_fee_eur):
+    """
+    Calculates accounting Profit/Loss on Disposal when selling a player in sale_year:
+      Gain/Loss on Disposal = Sale Fee - Book Value at Sale Year
+    """
+    fee = float(fee_eur or 0)
+    years = max(1, int(contract_years or 5))
+    s_year = min(years, max(0, int(sale_year)))
+    sale_fee = float(sale_fee_eur or 0)
+
+    book_value = fee * (1 - (s_year / years))
+    accounting_gain_loss = sale_fee - book_value
+
+    return {
+        "sale_year": s_year,
+        "book_value_at_sale": book_value,
+        "sale_fee": sale_fee,
+        "accounting_gain_loss": accounting_gain_loss,
+        "is_profit": accounting_gain_loss >= 0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# PSR & CLUB FINANCIAL UTILITIES
+# ---------------------------------------------------------------------------
+
+def load_club_financial_statement(financials_df, club_name):
+    """
+    Retrieves Deloitte financial records for a given club across available seasons.
+    Standardises metric names and computes key ratios.
+    """
+    if financials_df.empty or not club_name:
+        return pd.DataFrame()
+
+    c_norm = str(club_name).lower().strip()
+    df = financials_df.copy()
+    df["norm_name"] = df["club"].astype(str).str.lower().str.strip()
+
+    c_df = df[df["norm_name"].str.contains(c_norm, regex=False) | (df["norm_name"] == c_norm)].copy()
+    if c_df.empty:
+        # Try alias fallback
+        aliases = {
+            "manchester united": ["man utd", "manchester united"],
+            "manchester city": ["man city", "manchester city"],
+            "chelsea": ["chelsea"],
+            "arsenal": ["arsenal"],
+            "liverpool": ["liverpool"],
+            "tottenham hotspur": ["tottenham", "tottenham hotspur"],
+            "newcastle united": ["newcastle", "newcastle united"],
+            "aston villa": ["aston villa", "villa"],
+        }
+        for key, vals in aliases.items():
+            if c_norm in vals or any(v in c_norm for v in vals):
+                c_df = df[df["norm_name"].str.contains(key, regex=False)]
+                break
+
+    if c_df.empty:
+        return pd.DataFrame()
+
+    c_df["revenue_m_gbp"] = c_df["revenue_gbp"] / 1e6
+    c_df["wages_m_gbp"] = c_df["wage_cost_gbp"] / 1e6
+    c_df["operating_m_gbp"] = c_df["operating_result_gbp"] / 1e6
+    c_df["net_debt_m_gbp"] = c_df["net_debt_gbp"] / 1e6
+    c_df["net_funds_debt_m_gbp"] = c_df["net_funds_debt_gbp"] / 1e6
+
+    return c_df.sort_values("season", ascending=False).reset_index(drop=True)
+
+
+def calculate_club_psr_status(club_financials_row, annual_amortisation_m_gbp=0.0):
+    """
+    Evaluates Premier League Profitability and Sustainability Rules (PSR) indicators:
+      - Max Allowed Loss over 3 years: £105M (with secure owner funding) or £15M (without)
+      - Sustained Wage-to-Turnover ratio threshold: 70% (UEFA benchmark)
+      - Estimated PSR status: Compliant / Watchlist / At Risk
+    """
+    if club_financials_row is None or (isinstance(club_financials_row, pd.DataFrame) and club_financials_row.empty):
+        return {
+            "psr_status": "Unknown",
+            "wage_ratio_pct": 0,
+            "operating_margin_pct": 0,
+            "net_debt_m_gbp": 0,
+            "warning": "No financial records available",
+        }
+
+    if isinstance(club_financials_row, pd.DataFrame):
+        row = club_financials_row.iloc[0]
+    else:
+        row = club_financials_row
+
+    wage_ratio = float(row.get("wage_to_revenue_pct", 0))
+    op_result = float(row.get("operating_m_gbp", row.get("operating_result_gbp", 0) / 1e6))
+    net_debt = float(row.get("net_debt_m_gbp", row.get("net_debt_gbp", 0) / 1e6))
+
+    # Incorporate estimated annual amortisation into adjusted operational result
+    adj_result = op_result - float(annual_amortisation_m_gbp)
+
+    if wage_ratio > 85 or adj_result < -70:
+        status = "At Risk of Breach"
+        status_color = "#E06B6B"
+    elif wage_ratio > 75 or adj_result < -35:
+        status = "PSR Watchlist"
+        status_color = "#E8B75D"
+    else:
+        status = "PSR Compliant"
+        status_color = "#2FBF71"
+
+    return {
+        "psr_status": status,
+        "status_color": status_color,
+        "wage_ratio_pct": wage_ratio,
+        "operating_result_m_gbp": op_result,
+        "adjusted_result_m_gbp": adj_result,
+        "net_debt_m_gbp": net_debt,
+        "season": row.get("season", "Current"),
+    }

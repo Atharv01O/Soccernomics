@@ -8,8 +8,9 @@ from typing import Any
 import streamlit as st
 
 try:
-    from google import genai
-    from google.genai import types
+    from google import genai  # type: ignore # pyright: ignore [reportMissingImports]
+    # pyrefly: ignore [missing-import]
+    from google.genai import types  # type: ignore # pyright: ignore [reportMissingImports]
 except ImportError:  # pragma: no cover
     genai = None
     types = None

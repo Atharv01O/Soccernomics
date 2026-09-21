@@ -1,11 +1,17 @@
 """
-Soccernomics
-Football Transfer & Market Analytics
+Soccernomics — Premier League Football Financial & Transfer Analytics Platform
 """
 
 import streamlit as st
-
-from styles import inject
+import styles
+from utils import (
+    load_clubs,
+    load_transfers,
+    load_club_financials,
+    get_pl_club_ids,
+    get_pl_transfers,
+    format_eur_m,
+)
 
 
 # ---------------------------------------------------------
@@ -13,279 +19,144 @@ from styles import inject
 # ---------------------------------------------------------
 
 st.set_page_config(
-    page_title="Soccernomics",
+    page_title="Soccernomics — Football Finance & Market Analytics",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
+styles.inject()
+styles.render_sidebar()
 
-# ---------------------------------------------------------
-# Global styling
-# ---------------------------------------------------------
-
-inject()
-
-
-# ---------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------
-
-with st.sidebar:
-
-    st.markdown(
-        """
-        <div style="
-            font-family:'Space Grotesk', sans-serif;
-            font-size:1.6rem;
-            font-weight:700;
-            color:#EAF2ED;
-            margin-bottom:0.2rem;
-        ">
-            ⚽ Soccernomics
-        </div>
-
-        <div style="
-            color:#8FA398;
-            font-size:0.82rem;
-            margin-bottom:1.5rem;
-        ">
-            Football. Data. Economics.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        """
-        <div style="
-            border-top:1px solid #223029;
-            margin-bottom:1rem;
-        "></div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.caption("Explore")
-
-    st.markdown(
-        """
-        **Overview**  
-        The football transfer market at a glance.
-
-        **Transfers**  
-        Who bought whom — and for how much?
-
-        **Player Market Value**  
-        How player valuations move over time.
-
-        **Season Conclusions**  
-        What the numbers actually tell us.
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("---")
-
-    st.caption("Data")
-
-    st.markdown(
-        """
-        **Scope:** Premier League  
-        **Coverage:** 2002–2027  
-        **Source:** Transfermarkt-derived data
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("---")
-
-    st.caption(
-        "Built with Python · Pandas · Plotly · Streamlit"
-    )
+clubs = load_clubs()
+transfers = load_transfers()
+financials = load_club_financials()
+pl_club_ids = get_pl_club_ids(clubs)
+pl_transfers = get_pl_transfers(transfers, pl_club_ids)
 
 
 # ---------------------------------------------------------
-# Landing page
+# Hero Banner
 # ---------------------------------------------------------
 
 st.markdown(
     """
-    <div style="
-        max-width:900px;
-        padding-top:4rem;
-        padding-bottom:2rem;
-    ">
-
-        <div style="
-            color:#2FBF71;
-            font-family:'Space Grotesk', sans-serif;
-            font-size:0.85rem;
-            font-weight:600;
-            letter-spacing:0.12em;
-            text-transform:uppercase;
-            margin-bottom:0.8rem;
-        ">
-            FOOTBALL × DATA × ECONOMICS
+    <div style="max-width:900px;padding-top:2rem;padding-bottom:1.5rem;">
+        <div style="color:#2FBF71;font-family:'Space Grotesk', sans-serif;font-size:0.85rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:0.6rem;">
+            FOOTBALL × FINANCIAL ECONOMICS × ANALYTICS
         </div>
-
-        <div class="sc-title" style="
-            font-size:4rem;
-            line-height:1;
-            margin-bottom:1rem;
-        ">
+        <div class="sc-title" style="font-size:3.5rem;line-height:1.05;margin-bottom:1rem;">
             Soccernomics
         </div>
-
-        <div style="
-            color:#8FA398;
-            font-size:1.2rem;
-            line-height:1.6;
-            max-width:700px;
-        ">
-            A data-driven look at the money behind football —
-            from transfer fees and player valuations to club
-            spending and market trends.
+        <div style="color:#8FA398;font-size:1.15rem;line-height:1.6;max-width:720px;">
+            A data-first financial and economic analytics engine for the Premier League. 
+            Evaluate transfer spending, contract amortisation, club Deloitte accounts, 
+            PSR sustainability limits, and player performance ROI.
         </div>
-
     </div>
     """,
     unsafe_allow_html=True,
 )
 
+st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------
-# Quick navigation cards
+# Macro Financial KPIs
 # ---------------------------------------------------------
+
+tot_transfer_volume = pl_transfers[pl_transfers["transfer_fee"].notna()]["transfer_fee"].sum()
+tot_deloitte_revenue = financials["revenue_gbp"].sum() if not financials.empty else 0
+tot_wages = financials["wage_cost_gbp"].sum() if not financials.empty else 0
+avg_wage_ratio = (tot_wages / tot_deloitte_revenue * 100) if tot_deloitte_revenue > 0 else 0
+
+m1, m2, m3, m4 = st.columns(4)
+with m1:
+    styles.kpi_card("Historical Transfer Volume", format_eur_m(tot_transfer_volume), "2002–2027 recorded moves")
+with m2:
+    styles.kpi_card("League Aggregate Revenue", f"£{tot_deloitte_revenue/1e9:.2f}B", "Deloitte reported accounts")
+with m3:
+    styles.kpi_card("Total League Wage Bill", f"£{tot_wages/1e9:.2f}B", "statutory staff expenses")
+with m4:
+    styles.kpi_card("Aggregate Wage Ratio", f"{avg_wage_ratio:.1f}%", "UEFA benchmark: ≤70%", delta_positive=avg_wage_ratio <= 70)
+
+st.markdown("<div style='height:1.8rem'></div>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------
+# Interactive Module Cards
+# ---------------------------------------------------------
+
+styles.section_label("Platform Modules")
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    with styles.panel():
+        st.markdown(
+            """
+            <div style="color:#2FBF71;font-size:0.75rem;font-weight:700;letter-spacing:1px;margin-bottom:4px;">MODULE 01 & 02</div>
+            <div style="font-family:'Space Grotesk',sans-serif;font-size:1.2rem;font-weight:700;color:#EAF2ED;margin-bottom:8px;">
+                Transfers & Amortisation
+            </div>
+            <div style="color:#8FA398;font-size:0.85rem;line-height:1.45;margin-bottom:12px;">
+                Search historical moves, analyze overpay/underpay differentials against Transfermarkt market value benchmarks, and simulate 5-year accounting amortisation schedules.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.page_link("pages/2_Transfers.py", label="Open Transfer Analytics →", use_container_width=True)
+
+with c2:
+    with styles.panel():
+        st.markdown(
+            """
+            <div style="color:#2FBF71;font-size:0.75rem;font-weight:700;letter-spacing:1px;margin-bottom:4px;">MODULE 03</div>
+            <div style="font-family:'Space Grotesk',sans-serif;font-size:1.2rem;font-weight:700;color:#EAF2ED;margin-bottom:8px;">
+                Club Economics & PSR
+            </div>
+            <div style="color:#8FA398;font-size:0.85rem;line-height:1.45;margin-bottom:12px;">
+                Examine statutory Deloitte financial statements for all 20 Premier League clubs. Test 3-year PSR loss limits (£105M cap) and allowable deductions.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.page_link("pages/3_Club_Economics.py", label="Open Club Economics →", use_container_width=True)
+
+with c3:
+    with styles.panel():
+        st.markdown(
+            """
+            <div style="color:#2FBF71;font-size:0.75rem;font-weight:700;letter-spacing:1px;margin-bottom:4px;">MODULE 04 & 05</div>
+            <div style="font-family:'Space Grotesk',sans-serif;font-size:1.2rem;font-weight:700;color:#EAF2ED;margin-bottom:8px;">
+                Player Performance & Insights
+            </div>
+            <div style="color:#8FA398;font-size:0.85rem;line-height:1.45;margin-bottom:12px;">
+                Evaluate Cost per Goal and Cost per Minute from match appearance records, view positional heatmaps, and read empirical case studies (Chelsea ownership shift, Brentford vs Brighton ROI).
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.page_link("pages/4_Player_Analytics.py", label="Open Player Analytics →", use_container_width=True)
+
+st.markdown("<div style='height:1.8rem'></div>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------
+# Methodology Disclosures
+# ---------------------------------------------------------
+
+with st.expander("Methodology & Data Governance"):
+    st.markdown(
+        """
+        - **Data Integrity:** All findings are measured directly from Transfermarkt transfer records, official Deloitte published accounts, or raw match appearances.
+        - **Confidence Framework:** Non-trivial statistical findings carry confidence tags based on sample size (High: n>500, Moderate: n 20-500, Low: n<20).
+        - **Financial Accounting:** Player transfer fees are distinguished from operating revenue. Amortisation is calculated straight-line over contract length.
+        """
+    )
 
 st.markdown(
-    '<div class="sc-section-label">Explore the analysis</div>',
+    "<div style='height:1rem'></div><div style='text-align:center;color:#5C6E66;font-size:.75rem;'>"
+    "Soccernomics · Football. Data. Economics."
+    "</div>",
     unsafe_allow_html=True,
 )
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.markdown(
-        """
-        <div class="sc-kpi-card">
-            <div class="sc-kpi-label">01 · MARKET</div>
-            <div class="sc-kpi-value" style="font-size:1.25rem;">
-                Overview
-            </div>
-            <div style="
-                color:#8FA398;
-                font-size:0.82rem;
-                margin-top:0.5rem;
-            ">
-                Spending, revenue and market trends.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with col2:
-    st.markdown(
-        """
-        <div class="sc-kpi-card">
-            <div class="sc-kpi-label">02 · TRANSFERS</div>
-            <div class="sc-kpi-value" style="font-size:1.25rem;">
-                Transfers
-            </div>
-            <div style="
-                color:#8FA398;
-                font-size:0.82rem;
-                margin-top:0.5rem;
-            ">
-                Follow the money between clubs.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with col3:
-    st.markdown(
-        """
-        <div class="sc-kpi-card">
-            <div class="sc-kpi-label">03 · PLAYERS</div>
-            <div class="sc-kpi-value" style="font-size:1.25rem;">
-                Market Value
-            </div>
-            <div style="
-                color:#8FA398;
-                font-size:0.82rem;
-                margin-top:0.5rem;
-            ">
-                Explore player valuation trends.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with col4:
-    st.markdown(
-        """
-        <div class="sc-kpi-card">
-            <div class="sc-kpi-label">04 · ANALYSIS</div>
-            <div class="sc-kpi-value" style="font-size:1.25rem;">
-                Conclusions
-            </div>
-            <div style="
-                color:#8FA398;
-                font-size:0.82rem;
-                margin-top:0.5rem;
-            ">
-                Findings backed by the data.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# ---------------------------------------------------------
-# Methodology
-# ---------------------------------------------------------
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-with st.expander("Methodology & limitations"):
-
-    st.markdown(
-        """
-        **Scope**
-
-        Version 1 focuses on Premier League clubs and
-        transfer-market activity.
-
-        **Data**
-
-        Transfer and player-market-value data comes from
-        a Transfermarkt-derived dataset.
-
-        **What the transfer fee means**
-
-        A transfer fee represents the reported transaction
-        value. It should not be interpreted as the player's
-        intrinsic or "true" value.
-
-        **Financial data**
-
-        This version does not include audited club financials,
-        wages, debt or profit figures.
-
-        **Historical coverage**
-
-        The dataset provides more than two decades of
-        transfer-market history, allowing comparisons from
-        approximately 2002 through 2027.
-
-        **Interpretation**
-
-        The charts describe patterns in the available data.
-        They do not establish causal relationships.
-        """
-    )
