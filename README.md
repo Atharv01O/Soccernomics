@@ -1,64 +1,146 @@
 # Soccernomics
 
-Evidence-first analytics on the Premier League transfer market — spending, player valuations, and trading efficiency — built on real transfer and valuation data, not predictions.
+### Football Transfer Markets Through Data and Economics
 
-**Live app:** _add your deployed Streamlit URL here_
+Soccernomics is an interactive football analytics dashboard built with Python and Streamlit to study how money moves through the Premier League transfer market.
 
-## What this is
+The project combines transfer fees, player market values, club finances, wages, and player performance data to move beyond simple transfer-fee rankings and explore the economic context behind player transactions.
 
-Not a prediction engine. Every finding in this project is either:
-- **Measured** — a fact directly in the data (a transfer fee, a valuation, an age)
-- **Descriptive** — an aggregate or trend computed from the data, reported with its sample size
-- **Estimated** — clearly labeled as such where used, and kept to a minimum, because unlike physical systems (e.g. tyre degradation), transfer fees are negotiated outcomes with no reliable mechanistic model behind them
+---
 
-Every non-trivial claim in the app carries a confidence label (High / Moderate / Low) based on sample size, and Low-confidence findings are visually de-emphasized rather than presented with the same weight as well-supported ones.
+## Preview
 
-## What it answers
+![Soccernomics Overview](assets/overview.png)
 
-- How does a Premier League player's market value change with age — and does that differ by position?
-- Which transfers were the biggest bargains and overpays relative to market value at the time?
-- Does a club's transfer strategy show a measurable shift after an ownership change? (Chelsea, post-2022, as a case study)
-- Which clubs are actually the most efficient traders (buy-low, sell-high) by return on investment — not just by reputation?
+![Transfer Analytics](assets/transfers.png)
 
-## Key findings so far
+![Player Analytics](assets/player.png)
 
-1. **Market value peaks at age 26 across every position** — but the decline rate afterward is highly position-dependent. Attackers lose value fastest (~23% of peak retained by 32); goalkeepers are the outlier, retaining ~60% of peak value at the same age. *(High confidence, n=32,544+ valuation records)*
-2. **Erling Haaland's 2022 move to Man City is the single biggest bargain** in the dataset by fee-vs-valuation (€60M fee vs €150M market value), a direct effect of his release clause. *(High confidence — single verified transfer record)*
-3. **Chelsea's median transfer overpay rose from 28% to 39%** after the June 2022 ownership change, driven disproportionately by high-multiple deals for very young, low-valuation players — consistent with the publicly reported long-contract amortization strategy the Premier League later moved to restrict. *(Moderate confidence, n=93 across two eras)*
-4. **Brentford, not Brighton, is the Premier League's most efficient trading club** by return on transfer fees (4.02x vs 0.56x) — despite Brighton's stronger reputation for "smart" recruitment. *(Low–Moderate confidence — modest sample sizes, n=12 and n=17)*
+---
 
-## Scope
+## What Problem Does It Solve?
 
-**Premier League only, V1.** No club financial data (revenue, wages, debt, profit) is used or estimated anywhere — only transfer fees, market valuations, and player metadata, all sourced directly from the dataset. Other major leagues may be added later as a separate, clearly documented extension.
+Football transfer data usually answers simple questions:
 
-## Data source
+> How much did a club spend?
 
-[Football Data from Transfermarkt](https://www.kaggle.com/datasets/davidcariboo/player-scores) (David Cariboo, Kaggle) — `clubs`, `players`, `transfers`, `player_valuations` tables, covering 2002–2027.
+Soccernomics looks at the next layer:
 
-## Tech stack
+> Where did the money go, what value was attached to those transfers, and how does a player's financial profile relate to their performance and market value?
 
-Python, Pandas, NumPy, Plotly, Streamlit. No database, external API, or production backend — CSVs loaded and aggregated via `utils.py`, styled via `styles.py`.
+The project brings different datasets together into one analytical workflow covering:
 
-## Project structure
+- Club spending and transfer income
+- Net transfer activity
+- Transfer fees versus player market value
+- Player valuation changes
+- Club wage and financial context
+- Player performance
+- Individual transfer histories
 
-```
-soccernomics/
-├── app.py                          # Landing page
+---
+
+## What We Built
+
+### Overview
+
+A high-level view of the Premier League transfer market across seasons, showing spending, transfer income, net spend, transfer activity and the clubs driving the market.
+
+### Transfer Analytics
+
+An interactive transfer-market explorer where transfers can be filtered by:
+
+- Season
+- Club
+- Incoming / outgoing transfers
+- Transfer window
+- Minimum transfer fee
+
+The page also examines transfer flows, spending, income and the relationship between transfer fees and player market values.
+
+### Player Analytics
+
+A player-level financial and performance profile combining:
+
+- Current and peak market value
+- Transfer history
+- Transfer fees
+- Market-value context
+- Performance statistics
+- Wage trajectory
+- Market-value trajectory
+- Acquisition cost context
+- Positional profile
+
+Current-season performance information is enriched using Gemini with web-grounded football research.
+
+### Insights
+
+A concise analytical layer that turns the underlying datasets into interpretable football-business observations.
+
+---
+
+## What We Learned From the Data
+
+The analysis showed that transfer fees alone do not describe the economics of a football squad.
+
+**Net spend provides a different picture from gross spending**, because clubs can offset large purchases through player sales.
+
+**Market value provides useful context for a transfer fee**, but a difference between fee and estimated market value should not automatically be interpreted as profit or loss.
+
+**A player's value is dynamic**, so analysing a transfer as a single transaction misses what happens to the player's valuation over time.
+
+**Transfer expenditure is not the same as player cost**, because wages, amortisation, agent fees and other operating costs also affect the economics of a signing.
+
+**Combining financial, transfer and performance datasets produces more meaningful questions** than analysing any one dataset independently.
+
+---
+
+## Key Questions
+
+Soccernomics is built around a few simple questions:
+
+- How much money is moving through the Premier League transfer market?
+- Which clubs are the biggest spenders and sellers?
+- How does transfer income compare with spending?
+- How does a transfer fee compare with the player's recorded market value?
+- How does a player's market value change throughout their career?
+- What does a player's performance look like alongside their financial profile?
+
+---
+
+## Project Structure
+
+```text
+Soccernomics/
+│
+├── app.py
+├── requirements.txt
+├── README.md
+│
 ├── pages/
-│   ├── 1_Overview.py               # KPIs, spending trend, top spenders, trading efficiency, spotlight
-│   ├── 2_Transfers.py              # Searchable transfer table, overpay/bargain analysis
-│   ├── 3_Player_Market_Value.py    # Age/position value curves, player search
-│   └── 4_Insights.py               # Confidence-tagged findings ("Season Conclusions" style)
-├── styles.py                       # Shared design tokens, CSS, card/badge components
-├── utils.py                        # Data loading + PL-scoped aggregate query functions
-├── notebooks/soccernomics_analysis.ipynb   # Full EDA behind the findings above
-├── tests/test_utils.py             # Unit tests for the aggregate functions
-└── data/raw/                       # clubs.csv, players.csv, transfers.csv, player_valuations.csv
-```
-
-## Running locally
-
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
+│   ├── 1_Overview.py
+│   ├── 2_Transfers.py
+│   ├── 3_Player_Market_Value.py
+│   └── 4_Insights.py
+│
+├── data/
+│   └── raw/
+│       ├── clubs.csv
+│       ├── players.csv
+│       ├── transfers.csv
+│       ├── player_valuations.csv
+│       ├── premier_league_wages_cleaned.csv
+│       ├── playerstats.csv
+│       └── position_heatmaps_dataset.csv
+│
+├── notebooks/
+│   └── soccernomics_analysis.ipynb
+│
+├── styles.py
+├── utils.py
+├── gemini_utils.py
+├── sofascore_heatmap.py
+│
+└── tests/
+    └── test_utils.py
