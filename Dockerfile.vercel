@@ -8,4 +8,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/Atharv01O/Soccernomics/releases/download/data-v1/appearances.csv', 'data/raw/appearances.csv')"
+
 CMD ["sh", "-c", "streamlit run app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true"]
